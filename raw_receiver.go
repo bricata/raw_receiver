@@ -91,6 +91,7 @@ func compress(source string) {
 
     defer f.Close()
 
+
     // open a file handle for gzipped archiveDatePath 
     archName := source + ".zip"
     out, readErr := os.OpenFile(archName, os.O_WRONLY|os.O_CREATE, 0666)
@@ -103,7 +104,7 @@ func compress(source string) {
     writer := gzip.NewWriter(out)
 
     // copy the reader to the writer 
-    _, writeErr := io.Copy(writer, reader)
+    _, writeErr := io.Copy(writer, f)
     if writeErr != nil {
         log.Printf("Data copy failed, unable to compress: %s", writeErr)
         return
@@ -180,9 +181,9 @@ func rollFile(file string, info os.FileInfo) {
         }
         go compress(newFile)    
     } 
-    else {
-        go compress(file)
-    }
+//    else {
+//        go compress(file)
+//    }
 
     // See if there is a client using this file
     // if so restart the connection
