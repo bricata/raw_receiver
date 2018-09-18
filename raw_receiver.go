@@ -19,20 +19,6 @@ import (
     // "html"
 )
 
-// #  Design priniciples:
-// #   listen on raw TCP socket
-// #   accept incoming connections
-// #   run dedicated receiver thread for each client
-// #   receiver spawns itself a writer thread
-// #   split messages on newline
-// #   parse, validate and write JSON to 'activeDir' queue file
-// #   file manager process, rolls and compresses files hourly
-// #        fmer reads and filters JSON's before archiving
-// #        organized by timestamp and sensor 
-// #        files compressed and stored in designated location
-// #        seperate file manager goroutine enforces file size limits and 
-// #        handles archiving
-
 // Declare variables set by the cli that need to be accessible in 
 // multiple functions
 var activeClients = make(map[string]client)
