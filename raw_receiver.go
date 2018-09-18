@@ -46,6 +46,8 @@ type client struct {
     events    chan string
     conns     map[net.Conn]bool
     //cid     string
+    writer    *bufio.Writer
+    sfile     *os.File
     outFile   string
     addr      string
 }
@@ -91,9 +93,8 @@ func compress(source string) {
 
     defer f.Close()
 
-
     // open a file handle for gzipped archiveDatePath 
-    archName := source + ".zip"
+    archName := source + ".gz"
     out, readErr := os.OpenFile(archName, os.O_WRONLY|os.O_CREATE, 0666)
     if readErr != nil {
         log.Printf("Unable to create zip archive %s: %s", archName, readErr)
@@ -109,6 +110,8 @@ func compress(source string) {
         log.Printf("Data copy failed, unable to compress: %s", writeErr)
         return
     }
+    writer.Flush()
+    writer.Close()
 
     f.Close()
     os.Remove(source)
@@ -155,8 +158,12 @@ func archiveFile(file string, info os.FileInfo) {
     for _, client := range activeClients {
         if client.outFile == file {
             // found one, close related connections
-            for c, _ := range client.conns {
-                c.Close()
+            if len(client.conns) > 0 {
+                if _, err := os.Stat(client.outFile); os.IsNotExist(err) {
+                    // The output file is missing, restart the log stream
+                    log.Printf("Stream file %s archived. Recreating the stream.", client.outFile)
+                    go logStream(client)
+                }
             }
         }
     }  
@@ -173,28 +180,32 @@ func rollFile(file string, info os.FileInfo) {
 
     if strings.HasSuffix(file, "active") {
         newFile := filepath.Join(filepath.Dir(file), strings.TrimSuffix(filepath.Base(file), "active") + dtString)
-        // move the file so it won't be written to anymore
-        err := os.Rename(file, newFile)
-        if err !=  nil {
-            log.Printf("Error renaming file: %s", err)
-            return
-        }
-        go compress(newFile)    
-    } 
-//    else {
-//        go compress(file)
-//    }
+        // close and move the file so it won't be written to anymore
+        for _, client := range activeClients {
+            if client.outFile == file {
+                client.writer.Flush()
 
-    // See if there is a client using this file
-    // if so restart the connection
-    for _, client := range activeClients {
-        if client.outFile == file {
-            // found one, close related connections
-            for c, _ := range client.conns {
-                c.Close()
+                client.sfile.Sync()
+                client.sfile.Close()
+
+                err := os.Rename(file, newFile)        
+                if err !=  nil {
+                    log.Printf("Error renaming file: %s", err)
+                    return
+                }
+
+                go compress(newFile)
+
+                // If there are any active connections restart the log stream
+                if len(client.conns) > 0 {
+                    if _, err := os.Stat(client.outFile); os.IsNotExist(err) {
+                        log.Printf("Stream file %s rolled. Recreating the stream.", client.outFile)
+                        logStream(client)
+                    }
+                }
             }
-        }
-    }
+        }   
+    } 
 }
 
 func manageLogs(t <-chan time.Time) {
@@ -203,6 +214,17 @@ func manageLogs(t <-chan time.Time) {
     // If we find a file in violation, delete file if its empty, archive all 
     // others.  
     for now := range t {
+        // Check all active connections for missing stream files
+        for _, client := range activeClients {
+            if len(client.conns) > 0 {
+                if _, err := os.Stat(client.outFile); os.IsNotExist(err) {
+                    // The output file is missing, restart the log stream
+                    log.Printf("manageLogs found missing stream file %s. Recreating the stream.", client.outFile)
+                    logStream(client)
+                }
+            }
+        }
+
         // Evaluate files in activeDir
         activeFiles, err := ioutil.ReadDir(activeDir)
     
@@ -232,44 +254,38 @@ func manageLogs(t <-chan time.Time) {
     }
 }
 
-//func getWriter(path string) (writer *bufio.Writer) {
-//    // Create an output writer.   
-//    outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0666)
-//    if err != nil {
-//        // Can't create the output file, exit
-//        log.Printf("Error %s. Unable to create file for active stream. Exiting.", err)
-//        return
-//    }
-//
-//    w := bufio.NewWriter(outFile)
-//    
-//    return w
-//}
-
-func logStream(c *client) {
-    // Receive events on the clients channel and write them to the file
-    //  TODO{ Add other output formats. }
-
-    outFile, err := os.OpenFile(c.outFile, os.O_WRONLY|os.O_CREATE, 0666)
+func getWriter(path string) (writer *bufio.Writer, sfile *os.File) {
+    // Create an output writer.   
+    outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0666)
     if err != nil {
         // Can't create the output file, exit
         log.Printf("Error %s. Unable to create file for active stream. Exiting.", err)
         return
     }
 
-    //w := bufio.NewWriter(outFile)
+    w := bufio.NewWriter(outFile)
+    
+    return w, outFile
+}
 
-    //w := getWriter(c.outFile)
+func logStream(c client) {
+    // Receive events on the clients channel and write them to the file
+    //  TODO{ Add other output formats. }
+
+    // w := bufio.NewWriter(outFile)
+
+    c.writer, c.sfile = getWriter(c.outFile)
     
     // Receive events on the channel and write them to the ouput file
     for evt := range c.events {
-        bytes, err := outFile.WriteString(evt + "\n")
+        bytes, err := c.writer.WriteString(evt + "\n")
         if err != nil {
             log.Printf("Error: %s.  %s bytes written.", err, bytes)
             return
         }
     }
-    //w.Flush()    
+    c.writer.Flush()    
+    log.Print("No longer receiving events on channel.")
 }
 
 // Manage new connections to the receiver
@@ -287,22 +303,27 @@ func handleConnection(c net.Conn) {
     // Create the file path
     fname := filepath.Join(activeDir, clientIP + ".active") 
 
-    // Check if we've seen this IP already
-    if _, ok := activeClients[clientIP]; ok == false {
-
-        client := &client{
+    client := client{
             events:   make(chan string, 2),
             conns:    map[net.Conn]bool{ c : true},
             addr:     clientIP,
             outFile:  fname,
-        }
+    }
 
-        activeClients[clientIP] = *client
+    // Check if we've seen this IP already
+    if _, ok := activeClients[clientIP]; ok == false {
 
+        activeClients[clientIP] = client
         go logStream(client)
 
     } else {
         activeClients[clientIP].conns[c] = true
+        
+        if _, err := os.Stat(activeClients[clientIP].outFile); os.IsNotExist(err) {
+            // The output file is missing, restart the log stream
+            log.Printf("The stream file for client %s is missing. Recreating the log stream.", clientIP)
+            go logStream(activeClients[clientIP])
+        }
     }
 
     rdr := bufio.NewReader(c)
@@ -332,7 +353,7 @@ func handleConnection(c net.Conn) {
 
 func main() {
 
-    flag.Int64Var(&maxSize, "max_size", 1000000, "Max size in bytes an active file can reach before being archived.")
+    flag.Int64Var(&maxSize, "max_size", 1000000000, "Max size in bytes an active file can reach before being archived.")
     flag.Float64Var(&maxAge, "max_age", 60, "Number of minutes a file can be inactive before being archived.")
 
     flag.StringVar(&archiveDir, "archive_dir", "/var/log/bricata/archive", "Directory for archiving Raw Bricata export files.")
@@ -345,8 +366,8 @@ func main() {
     
     flag.Parse()
 
-    // Create a 30 second time ticker
-    t := time.Tick(time.Minute / 2)
+    // Create a 10 second time ticker
+    t := time.Tick(time.Minute / 6)
     // Start the log manager goroutine
     go manageLogs(t)
 
