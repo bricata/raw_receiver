@@ -162,17 +162,13 @@ func rollFile(file string, info os.FileInfo) {
     year, month, day := info.ModTime().Date()
     hour, min, _ := info.ModTime().Clock()
 
-    dtString := fmt.Sprintf("%v%v%v%v%v", year, int(month), day, hour, min)
+    dtString := fmt.Sprintf("%4d%02d%02d%02d%02d", year, int(month), day, hour, min)
 
     if strings.HasSuffix(file, "active") {
         newFile := filepath.Join(filepath.Dir(file), strings.TrimSuffix(filepath.Base(file), "active") + dtString)
         // close and move the file so it won't be written to anymore
         for _, client := range activeClients {
             if client.outFile == file {
-                client.writer.Flush()
-
-                client.sfile.Sync()
-                client.sfile.Close()
 
                 err := os.Rename(file, newFile)        
                 if err !=  nil {
