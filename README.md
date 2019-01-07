@@ -17,16 +17,16 @@ First clone the repo using git:
 	git clone https://github.com/bricata/raw_receiver.git
 </code>
 
+
 From here you can go one of two directions:
 
-1) Build the binary using go
+1) Build the binary using go.  This drops the raw_receiver binary in $GOPATH/bin.  You can then run it directly from there or copy it to your preferred location. 
 
 <code>
 	cd raw_receiver
 	go install
-</code>>
+</code>
 
-This drops the raw_receiver binary in $GOPATH/bin.  You can then run it directly from there or copy it to your preferred location. 
 
 2) If you don't want to build with go, you can use the pre-compiled binary included in the repo.  While this is not the best approach, it works on most \*nix platforms. As with option 1, copy the executable to the location you prefer to run it from.  
 
