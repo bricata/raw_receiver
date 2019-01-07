@@ -266,7 +266,8 @@ func logStream(c client) {
             return
         }
     }
-    c.writer.Flush()    
+    c.writer.Flush()
+    c.sfile.Close()    
     log.Print("No longer receiving events on channel.")
 }
 
